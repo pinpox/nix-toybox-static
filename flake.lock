@@ -1,0 +1,44 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1762977756,
+        "narHash": "sha256-4PqRErxfe+2toFJFgcRKZ0UI9NSIOJa+7RXVtBhy4KE=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c5ae371f1a6a7fd27823bc500d9390b38c05fa55",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "toybox": "toybox"
+      }
+    },
+    "toybox": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1761734142,
+        "narHash": "sha256-laot8cQZFY17tb8edFdqSH8rmPGY5FyYjHXlw6mlsdg=",
+        "owner": "landley",
+        "repo": "toybox",
+        "rev": "824575c76230ffffce9905bb8ec70486c6a16905",
+        "type": "github"
+      },
+      "original": {
+        "owner": "landley",
+        "repo": "toybox",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
