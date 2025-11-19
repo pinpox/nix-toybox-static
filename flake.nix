@@ -77,6 +77,10 @@
 
           buildPhase = ''
             runHook preBuild
+            # For Linux targets with musl, ensure we use the correct compiler
+            ${nixpkgs.lib.optionalString isLinuxTarget ''
+              export CC="${pkgsStatic.stdenv.cc}/bin/cc"
+            ''}
             make $makeFlags ${buildTarget}
             runHook postBuild
           '';

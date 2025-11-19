@@ -1,0 +1,126 @@
+name: Build Static Binaries
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        target:
+          - x86_64-linux
+          - aarch64-linux
+          - armv7l-linux
+          - i686-linux
+          - x86_64-darwin
+          - aarch64-darwin
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+        
+      - name: Build toybox binary
+        run: |
+          # Cross-compile from x86_64-linux to target platform
+          nix build .#pkgsCross.x86_64-linux.${{ matrix.target }}.toybox --out-link result-toybox
+          
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts
+          # Copy the built binary with platform-specific name
+          cp -L result-toybox/bin/toybox artifacts/toybox-${{ matrix.target }}
+          # Make sure it's executable
+          chmod +x artifacts/toybox-${{ matrix.target }}
+          
+      - name: Display binary info
+        run: |
+          echo "Built binary for ${{ matrix.target }}:"
+          ls -lh artifacts/
+          # Show file info (type, architecture, etc.)
+          file artifacts/toybox-${{ matrix.target }} || true
+          
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: toybox-${{ matrix.target }}
+          path: artifacts/toybox-${{ matrix.target }}
+          retention-days: 30
+          
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          
+      - name: Display all artifacts
+        run: |
+          echo "All built binaries:"
+          ls -lhR artifacts/
+          
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          # Move all binaries to release directory
+          for dir in artifacts/*/; do
+            cp "$dir"* release/ || true
+          done
+          echo "Combined release contents:"
+          ls -lh release/
+          
+      - name: Generate SHA256 checksums
+        run: |
+          cd release
+          sha256sum toybox-* > SHA256SUMS
+          cat SHA256SUMS
+          
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Build ${{ github.run_number }} (${{ github.sha }})
+          body: |
+            Automated build from commit ${{ github.sha }}
+            
+            ### Platforms
+            - `toybox-x86_64-linux` - Linux x86_64 (static musl)
+            - `toybox-aarch64-linux` - Linux ARM64 (static musl)
+            - `toybox-armv7l-linux` - Linux ARMv7 (static musl)
+            - `toybox-i686-linux` - Linux i686 (static musl)
+            - `toybox-x86_64-darwin` - macOS x86_64 (dynamic)
+            - `toybox-aarch64-darwin` - macOS ARM64/M1 (dynamic)
+            
+            ### Checksums
+            SHA256 checksums are available in the `SHA256SUMS` file.
+          files: |
+            release/toybox-*
+            release/SHA256SUMS
+          draft: false
+          prerelease: false
+          
+      - name: Upload combined release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: toybox-all-platforms
+          path: release/
+          retention-days: 90
