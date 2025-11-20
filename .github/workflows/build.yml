@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
         target:
@@ -18,21 +18,19 @@ jobs:
           - aarch64-linux
           - armv7l-linux
           - i686-linux
-          - x86_64-darwin
-          - aarch64-darwin
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
-        
+
       - name: Setup Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@main
-        
+
       - name: Build toybox binary
         run: |
           # Cross-compile from x86_64-linux to target platform
@@ -59,9 +57,59 @@ jobs:
           name: toybox-${{ matrix.target }}
           path: artifacts/toybox-${{ matrix.target }}
           retention-days: 30
-          
+
+  build-darwin:
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-darwin
+            runner: macos-13  # Intel runner
+          - target: aarch64-darwin
+            runner: macos-latest  # ARM64 runner (M1)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build toybox binary
+        run: |
+          # Build natively on macOS for the target platform
+          nix build .#packages.${{ matrix.target }}.toybox --out-link result-toybox
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts
+          # Copy the built binary with platform-specific name
+          cp -L result-toybox/bin/toybox artifacts/toybox-${{ matrix.target }}
+          # Make sure it's executable
+          chmod +x artifacts/toybox-${{ matrix.target }}
+
+      - name: Display binary info
+        run: |
+          echo "Built binary for ${{ matrix.target }}:"
+          ls -lh artifacts/
+          # Show file info (type, architecture, etc.)
+          file artifacts/toybox-${{ matrix.target }} || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: toybox-${{ matrix.target }}
+          path: artifacts/toybox-${{ matrix.target }}
+          retention-days: 30
+
   release:
-    needs: build
+    needs: [build-linux, build-darwin]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
