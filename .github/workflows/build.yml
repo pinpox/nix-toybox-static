@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
         target:
@@ -18,66 +18,122 @@ jobs:
           - aarch64-linux
           - armv7l-linux
           - i686-linux
-          - x86_64-darwin
-          - aarch64-darwin
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          
+
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
-        
+
       - name: Setup Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@main
-        
-      - name: Build toybox binary
-        run: |
-          # Cross-compile from x86_64-linux to target platform
-          nix build .#pkgsCross.x86_64-linux.${{ matrix.target }}.toybox --out-link result-toybox
-          
-      - name: Prepare artifacts
+
+      - name: Build individual command binaries
         run: |
           mkdir -p artifacts
-          # Copy the built binary with platform-specific name
-          cp -L result-toybox/bin/toybox artifacts/toybox-${{ matrix.target }}
-          # Make sure it's executable
-          chmod +x artifacts/toybox-${{ matrix.target }}
-          
+          # List of coreutils-like commands to build
+          COMMANDS="basename cat chmod chown chgrp cp cut date dd df dirname echo env false head ls mkdir mktemp mv pwd rm rmdir seq sleep sort tail tee touch true uname wc whoami yes"
+
+          for cmd in $COMMANDS; do
+            echo "Building $cmd for ${{ matrix.target }}..."
+            if nix build .#pkgsCross.x86_64-linux.${{ matrix.target }}.$cmd --out-link result-$cmd 2>/dev/null; then
+              cp -L result-$cmd/bin/$cmd artifacts/$cmd-${{ matrix.target }}
+              chmod +x artifacts/$cmd-${{ matrix.target }}
+              rm result-$cmd
+            else
+              echo "Warning: $cmd not available for ${{ matrix.target }}, skipping"
+            fi
+          done
+
       - name: Display binary info
         run: |
-          echo "Built binary for ${{ matrix.target }}:"
+          echo "Built binaries for ${{ matrix.target }}:"
           ls -lh artifacts/
-          # Show file info (type, architecture, etc.)
-          file artifacts/toybox-${{ matrix.target }} || true
-          
+          echo "Sample binary info:"
+          file artifacts/ls-${{ matrix.target }} || true
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: toybox-${{ matrix.target }}
-          path: artifacts/toybox-${{ matrix.target }}
+          name: commands-${{ matrix.target }}
+          path: artifacts/*-${{ matrix.target }}
           retention-days: 30
-          
+
+  build-darwin:
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-darwin
+            runner: macos-13  # Intel runner
+          - target: aarch64-darwin
+            runner: macos-latest  # ARM64 runner (M1)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build individual command binaries
+        run: |
+          mkdir -p artifacts
+          # List of portable commands available on Darwin
+          COMMANDS="basename cat chmod cp date dirname echo env false head ls mkdir mktemp mv pwd rm rmdir seq sleep tail tee touch true uname wc whoami yes"
+
+          for cmd in $COMMANDS; do
+            echo "Building $cmd for ${{ matrix.target }}..."
+            if nix build .#packages.${{ matrix.target }}.$cmd --out-link result-$cmd 2>/dev/null; then
+              cp -L result-$cmd/bin/$cmd artifacts/$cmd-${{ matrix.target }}
+              chmod +x artifacts/$cmd-${{ matrix.target }}
+              rm result-$cmd
+            else
+              echo "Warning: $cmd not available for ${{ matrix.target }}, skipping"
+            fi
+          done
+
+      - name: Display binary info
+        run: |
+          echo "Built binaries for ${{ matrix.target }}:"
+          ls -lh artifacts/
+          echo "Sample binary info:"
+          file artifacts/ls-${{ matrix.target }} || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: commands-${{ matrix.target }}
+          path: artifacts/*-${{ matrix.target }}
+          retention-days: 30
+
   release:
-    needs: build
+    needs: [build-linux, build-darwin]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
-    
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          
+
       - name: Display all artifacts
         run: |
           echo "All built binaries:"
           ls -lhR artifacts/
-          
+
       - name: Prepare release files
         run: |
           mkdir -p release
@@ -86,14 +142,16 @@ jobs:
             cp "$dir"* release/ || true
           done
           echo "Combined release contents:"
-          ls -lh release/
-          
+          ls -lh release/ | head -20
+          echo "Total files: $(ls -1 release/ | wc -l)"
+
       - name: Generate SHA256 checksums
         run: |
           cd release
-          sha256sum toybox-* > SHA256SUMS
-          cat SHA256SUMS
-          
+          sha256sum *-* > SHA256SUMS
+          cat SHA256SUMS | head -20
+          echo "Total checksums: $(wc -l < SHA256SUMS)"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
@@ -101,26 +159,33 @@ jobs:
           name: Build ${{ github.run_number }} (${{ github.sha }})
           body: |
             Automated build from commit ${{ github.sha }}
-            
-            ### Platforms
-            - `toybox-x86_64-linux` - Linux x86_64 (static musl)
-            - `toybox-aarch64-linux` - Linux ARM64 (static musl)
-            - `toybox-armv7l-linux` - Linux ARMv7 (static musl)
-            - `toybox-i686-linux` - Linux i686 (static musl)
-            - `toybox-x86_64-darwin` - macOS x86_64 (dynamic)
-            - `toybox-aarch64-darwin` - macOS ARM64/M1 (dynamic)
-            
+
+            ### Individual Command Binaries
+            This release contains individual statically-linked coreutils command binaries.
+
+            **Linux platforms** (static musl):
+            - `*-x86_64-linux` - Linux x86_64
+            - `*-aarch64-linux` - Linux ARM64
+            - `*-armv7l-linux` - Linux ARMv7
+            - `*-i686-linux` - Linux i686
+
+            **macOS platforms** (dynamic):
+            - `*-x86_64-darwin` - macOS x86_64
+            - `*-aarch64-darwin` - macOS ARM64/M1
+
+            **Available commands**: basename, cat, chmod, chown, chgrp, cp, cut, date, dd, df, dirname, echo, env, false, head, ls, mkdir, mktemp, mv, pwd, rm, rmdir, seq, sleep, sort, tail, tee, touch, true, uname, wc, whoami, yes
+
             ### Checksums
             SHA256 checksums are available in the `SHA256SUMS` file.
           files: |
-            release/toybox-*
+            release/*-*
             release/SHA256SUMS
           draft: false
           prerelease: false
-          
+
       - name: Upload combined release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: toybox-all-platforms
+          name: commands-all-platforms
           path: release/
           retention-days: 90

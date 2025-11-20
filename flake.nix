@@ -19,19 +19,20 @@
           # Import nixpkgs for the host platform
           pkgs = import nixpkgs { system = hostPlatform; };
 
-          # Get cross-compilation pkgs if needed
-          crossPkgs =
-            if hostPlatform == targetPlatform then
-              pkgs
-            else
-              import nixpkgs {
-                system = hostPlatform;
-                crossSystem = nixpkgs.lib.systems.examples.${targetPlatform} or { config = targetPlatform; };
-              };
-
           # Determine the target platform info
           targetPlatformParsed = nixpkgs.lib.systems.parse.mkSystemFromString targetPlatform;
           isLinuxTarget = targetPlatformParsed.kernel.name == "linux";
+          isCross = hostPlatform != targetPlatform;
+
+          # Get the appropriate pkgs for the target
+          crossPkgs =
+            if isCross then
+              import nixpkgs {
+                system = hostPlatform;
+                crossSystem = nixpkgs.lib.systems.examples.${targetPlatform} or { config = targetPlatform; };
+              }
+            else
+              pkgs;
 
           # Use musl for static linking on Linux, regular pkgs for Darwin (static linking not well supported)
           pkgsStatic = if isLinuxTarget then crossPkgs.pkgsMusl else crossPkgs;
@@ -69,7 +70,46 @@
 
           configurePhase = nixpkgs.lib.optionalString isToybox ''
             runHook preConfigure
-            make defconfig
+            ${nixpkgs.lib.optionalString (!isLinuxTarget) ''
+              # For non-Linux platforms, use allnoconfig and only enable portable commands
+              make allnoconfig
+              # Enable only POSIX/portable commands that work on Darwin
+              cat >> .config << 'EOF'
+CONFIG_BASENAME=y
+CONFIG_CAT=y
+CONFIG_CHMOD=y
+CONFIG_CP=y
+CONFIG_DATE=y
+CONFIG_DIRNAME=y
+CONFIG_ECHO=y
+CONFIG_ENV=y
+CONFIG_FALSE=y
+CONFIG_HEAD=y
+CONFIG_LS=y
+CONFIG_MKDIR=y
+CONFIG_MKTEMP=y
+CONFIG_MV=y
+CONFIG_PWD=y
+CONFIG_RM=y
+CONFIG_RMDIR=y
+CONFIG_SEQ=y
+CONFIG_SLEEP=y
+CONFIG_TAC=y
+CONFIG_TAIL=y
+CONFIG_TEE=y
+CONFIG_TOUCH=y
+CONFIG_TRUE=y
+CONFIG_UNAME=y
+CONFIG_WC=y
+CONFIG_WHICH=y
+CONFIG_WHOAMI=y
+CONFIG_YES=y
+EOF
+              make oldconfig
+            ''}
+            ${nixpkgs.lib.optionalString isLinuxTarget ''
+              make defconfig
+            ''}
             runHook postConfigure
           '';
 
@@ -77,9 +117,12 @@
 
           buildPhase = ''
             runHook preBuild
-            # For Linux targets with musl, ensure we use the correct compiler
             ${nixpkgs.lib.optionalString isLinuxTarget ''
-              export CC="${pkgsStatic.stdenv.cc}/bin/cc"
+              ${if isCross then ''
+                export CC="${pkgsStatic.stdenv.cc}/bin/${pkgsStatic.stdenv.cc.targetPrefix}cc"
+              '' else ''
+                export CC="${pkgsStatic.stdenv.cc}/bin/cc"
+              ''}
             ''}
             make $makeFlags ${buildTarget}
             runHook postBuild
